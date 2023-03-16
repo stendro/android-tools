@@ -1,0 +1,93 @@
+#!/bin/bash
+#
+# Get blobs, generate mk entries
+#
+# Author: stendro
+#
+
+# color codes
+COLOR_N="\033[0m"
+COLOR_R="\033[0;31m"
+COLOR_G="\033[1;32m"
+COLOR_Y="\033[1;33m"
+COLOR_P="\033[1;35m"
+
+# abort func
+ABORT() {
+  echo -e "$COLOR_R""Error: $*"
+  exit 1
+}
+
+# path to this
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+
+# print help
+if [ "$1" = "" ] || [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+  echo -e "$COLOR_Y""Search, copy blobs and generate .mk"
+  echo
+  echo "Usage: <SEARCH PATH> <OUTPUT PATH> <VENDOR TREE>"
+  echo
+  echo "Specify the list of blobs in 'blobs.txt'. Just the name, one per line."
+  echo
+  echo "OPTIONAL: '-dry' to print without action. <VENDOR TREE>, using default without it."
+  echo
+  echo "Paths must be entered without the last '/'"
+  echo "<SEARCH PATH> is the root of the extracted system, or vendor folder."
+  echo "<OUTPUT PATH> is where the blobs are copied to, retaining file structure."
+  echo "<VENDOR TREE> is the path in the vendor tree. It's used to generate the .mk file."
+  echo "Example: vendor/lge/g5-common/proprietary"
+  echo -e "$COLOR_N"
+  exit 0
+fi
+[ "$1" ] && BLOB_PATH=$1 || ABORT "Must specify search path (root of system image)."
+[ "$2" ] && BLOB_OUT=$2 || ABORT "Must specify output path."
+[ "$3" ] && ! [ "$3" = "-dry" ] && VENDOR_PATH=$3 || echo -e "$COLOR_R""Vendor tree not specified, using default."
+
+# vendor tree parameters
+DROID_OUT="SYSTEM_OR_VENDOR"
+MK_FILE=$SCRIPT_DIR/aosp-vendor.txt
+if [ "$VENDOR_PATH" = "" ]; then
+  VENDOR_PATH="vendor/lge/g5-common/proprietary"
+fi
+
+# list of blobs to get
+LISTFILE=$SCRIPT_DIR/blobs.txt
+LIST_GET=$(cat "$LISTFILE" | tr '\n' ' ')
+BLOBS_LIST=($LIST_GET)
+SORT_LIST=$(echo "${BLOBS_LIST[@]}" | awk 'BEGIN{RS=" ";} {print $1}' | sort | tr '\n' ' ')
+SORTED_LIST=($SORT_LIST)
+
+RSYNC_LIST() {
+for i in "${!BLOBS_LIST[@]}"; do
+  find "$BLOB_PATH" -name "${BLOBS_LIST[$i]}" -exec bash -c 'rsync --mkpath "$1" "'${BLOB_OUT}'${1#'$BLOB_PATH'}"' _ {} \;
+done
+}
+
+ECHO_LIST() {
+for i in "${!SORTED_LIST[@]}"; do
+  find "$BLOB_PATH" -name "${SORTED_LIST[$i]}" -exec bash -c 'echo -e "$1" "'$COLOR_P'""'${BLOB_OUT}'${1#'$BLOB_PATH'}""'$COLOR_N'"' _ {} \;
+done
+}
+
+AOSP_GENLIST() {
+echo "PRODUCT_COPY_FILES += \\" > "$MK_FILE"
+for i in "${!SORTED_LIST[@]}"; do
+  find "$BLOB_PATH" -name "${SORTED_LIST[$i]}" -exec bash -c 'echo "    '$VENDOR_PATH'${1#'$BLOB_PATH'}":""'$DROID_OUT'"${1#'$BLOB_PATH'} \\"' _ {} >> "$MK_FILE" \;
+done
+sed -i s:"${DROID_OUT}"/vendor:\$\(TARGET_COPY_OUT_VENDOR\):g "$MK_FILE"
+sed -i s:"${DROID_OUT}":\$\(TARGET_COPY_OUT_SYSTEM\):g "$MK_FILE"
+}
+
+# do the thing
+if [ "$3" = "-dry" ] || [ "$4" = "-dry" ]; then
+  echo -e "$COLOR_G""These are the blobs (and the output path).""$COLOR_N"
+  ECHO_LIST
+  exit 0
+else
+  RSYNC_LIST
+  AOSP_GENLIST
+  echo -e "$COLOR_G""Done"
+  echo -e "$COLOR_N""Blobs copied to:" "$COLOR_P""$BLOB_OUT"
+  echo -e "$COLOR_N""AOSP mk entries:" "$COLOR_P""$MK_FILE"
+  exit 0
+fi

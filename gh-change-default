@@ -1,0 +1,81 @@
+#!/bin/bash
+#
+# Change the default branch of every repo of a given github user.
+#
+# Author: stendro
+#
+
+# color codes
+COLOR_N="\033[0m"
+COLOR_R="\033[0;31m"
+COLOR_G="\033[1;32m"
+COLOR_Y="\033[1;33m"
+COLOR_P="\033[1;35m"
+
+# abort func
+ABORT() {
+  echo -e "$COLOR_R""Error: $*"
+  exit 1
+}
+
+# print help
+if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+  echo -e "$COLOR_Y""Change default branch of every repo of a given github user."
+  echo
+  echo "Usage: <USER> <BRANCH>"
+  echo
+  echo "Optional: 3rd argument '-dry', to list repos that would be changed."
+  echo -e "$COLOR_N"
+  exit 0
+fi
+[ "$1" ] && GH_USER=$1 || ABORT "Must specify github user."
+[ "$2" ] && GH_BRANCH=$2 || ABORT "Must specify branch."
+
+# create list of repos
+REPO_GET=$(gh repo list "$GH_USER" -L 400 |awk '{print $1}' | sed "s/$GH_USER\///" | tr '\n' ' ')
+REPO_LIST=($REPO_GET)
+
+FILTER_REPOS() {
+for i in "${!REPO_LIST[@]}"; do
+  BRANCHES_GET=$(git ls-remote -h https://github.com/"$GH_USER"/"${REPO_LIST[$i]}" | awk '{print $2}' | sed 's/refs\/heads\///' | tr '\n' ' ')
+  BRANCHES_LIST=("$BRANCHES_GET")
+  if printf '%s\n' ${BRANCHES_LIST[@]} | grep -qxe "$GH_BRANCH"; then
+    REPO_ADD="${REPO_LIST[$i]}"
+    REPO_FILTERED+=($REPO_ADD)
+  fi
+done
+}
+
+SET_DEFAULT_BRANCH() {
+for i in "${!REPO_FILTERED[@]}"; do
+  gh repo edit "$GH_USER"/"${REPO_FILTERED[$i]}" --default-branch "$GH_BRANCH"
+done
+}
+
+PERFORM_GH_CHANGE() {
+  FILTER_REPOS
+  SET_DEFAULT_BRANCH
+}
+
+# do the thing
+if [ "$3" = "-dry" ]; then
+  FILTER_REPOS
+  echo -e "$COLOR_G""These repositories would be changed."
+  echo -e "$COLOR_P""${REPO_FILTERED[*]}"
+  exit 0
+else
+  while true; do
+    echo -e "$COLOR_R"
+    read -rp "WARNING: This will change the default branch on all matching repositories. Continue?" yn
+    echo -e "$COLOR_N"
+    case $yn in
+      [Yy]* ) PERFORM_GH_CHANGE ;;
+      [Nn]* ) exit 0 ;;
+          * ) echo -e "$COLOR_Y""Please answer yes or no" ;;
+    esac
+  done
+  echo -e "$COLOR_G""Done."
+  echo "Changed the following repositories:"
+  echo -e "$COLOR_P""${REPO_FILTERED[*]}"
+  exit 0
+fi

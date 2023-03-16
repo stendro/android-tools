@@ -1,0 +1,145 @@
+#!/bin/bash
+#
+# Find blob dependencies
+#
+# Author: stendro
+#
+
+# abort func
+ABORT() {
+  echo -e "$COLOR_R""Error: $*"
+  exit 1
+}
+
+# color codes
+COLOR_N="\033[0m"
+COLOR_R="\033[0;31m"
+COLOR_G="\033[1;32m"
+COLOR_Y="\033[1;33m"
+COLOR_P="\033[1;35m"
+
+# global vars
+SETUP_VARS() {
+BLOB_NAME=$(basename "$THE_BLOB")
+DEPS_FIND=$(DO_OBJDUMP "$THE_BLOB" | tr '\n' ' ')
+DEPS_LIST=($DEPS_FIND)
+}
+
+# objdump command
+DO_OBJDUMP() {
+  objdump -p "$1" 2>/dev/null | grep 'NEEDED' | tr -s ' ' | cut -d' ' -f3
+}
+
+# print help
+SHOW_HELP() {
+  echo
+  echo -e "$COLOR_P""Required:""${COLOR_Y}"
+  echo "-i | --input   =  Blob in question."
+  echo "-p | --path    =  Search path to use (i.e. root of system image)."
+  echo
+  echo -e "${COLOR_P}""Optional:""${COLOR_Y}"
+  echo "-l | --list    =  Only list the dependencies of <input> (<path> not requred)."
+  echo "-m | --missing =  Find blobs that have missing dependencies."
+  echo "-s | --search  =  Search for libraries/binaries that requre <input>."
+  echo "-h | --help    =  Show this help text."
+  echo
+  echo "If only -i and -p is specified, the program will search <path> for dependencies"
+  echo "and report any that are found/missing."
+  echo -e "$COLOR_N"
+  exit
+}
+
+# read parameters
+PARSE_INPUT() {
+  while [[ ${#} -ge 1 ]]; do
+    case "${1}" in
+      "-i"|"--input") shift && THE_BLOB=${1} ;;
+      "-p"|"--path") shift && BLOB_SEARCH=${1} ;;
+      "-l"|"--list") LIST_ONLY=true ;;
+      "-s"|"--search") FIND_WHICH=true ;;
+      "-m"|"--missing") FIND_MISSING=true ;;
+      "-h"|"--help") SHOW_HELP ;;
+    esac
+    shift
+  done
+}
+
+# find the dependencies of the specified blob
+FIND_DEPS() {
+for i in "${!DEPS_LIST[@]}"; do
+  echo -e "$COLOR_G""${DEPS_LIST[$i]}""$COLOR_N"
+  find "$BLOB_SEARCH" -name "${DEPS_LIST[$i]}"
+  NOTFOUND=$(find "$BLOB_SEARCH" -name "${DEPS_LIST[$i]}" | wc -l)
+  [[ "$NOTFOUND" -eq "0" ]] && echo -e "$COLOR_R""Didn't find ${DEPS_LIST[$i]}"
+done
+}
+
+# find libraries that require the specified blob
+FIND_REQUIRE() {
+FIND_BLOBS=$(find "$BLOB_SEARCH" -type f -iname '*.so' | tr '\n' ' ')
+FOUND_BLOBS=($FIND_BLOBS)
+for i in "${!FOUND_BLOBS[@]}"; do
+  BLOB_REQS=$(DO_OBJDUMP "${FOUND_BLOBS[$i]}")
+  if echo "${BLOB_REQS[@]}" | grep -xq "$BLOB_NAME"; then
+    echo -e "$COLOR_Y""$BLOB_NAME" "$COLOR_N""is required by" "$COLOR_P""${FOUND_BLOBS[$i]}"
+  fi
+done
+}
+
+# find binaries that require the specified blob
+FIND_REQ_BINS() {
+FIND_BINS=$(find "$BLOB_SEARCH" -type f ! -name '*.*' | perl -lne 'print if -B' | tr '\n' ' ')
+FOUND_BINS=($FIND_BINS)
+for i in "${!FOUND_BINS[@]}"; do
+  BIN_REQS=$(DO_OBJDUMP "${FOUND_BINS[$i]}")
+  if echo "${BIN_REQS[@]}" | grep -xq "$BLOB_NAME"; then
+    echo -e "$COLOR_Y""$BLOB_NAME" "$COLOR_N""is required by" "$COLOR_P""${FOUND_BINS[$i]}"
+  fi
+done
+}
+
+FIND_MISSING_REQS() {
+FIND_LIBS=$(find "$BLOB_SEARCH" -type f -iname '*.so' | tr '\n' ' ')
+FOUND_LIBS=($FIND_LIBS)
+for i in "${!FOUND_LIBS[@]}"; do
+  REQS_FIND=$(DO_OBJDUMP "${FOUND_LIBS[$i]}" | tr '\n' ' ')
+  LIB_REQS=($REQS_FIND)
+  for m in "${!LIB_REQS[@]}"; do
+    NOTFOUND=$(find "$BLOB_SEARCH" -name "${LIB_REQS[$m]}" | wc -l)
+    [[ "$NOTFOUND" -eq "0" ]] && echo -e "$COLOR_R""${FOUND_LIBS[$i]} is missing ${LIB_REQS[$m]}"
+  done
+done
+}
+
+# if nothing specified
+if [[ -z "$1" ]]; then
+  SHOW_HELP
+fi
+
+# do the thing
+PARSE_INPUT "${@}"
+[[ "$THE_BLOB" ]] || [[ "$FIND_MISSING" ]] || ABORT "Must specify input blob."
+SETUP_VARS
+if [[ "$LIST_ONLY" = "true" ]]; then
+  echo -e "$COLOR_G""These are the dependencies.""$COLOR_Y"
+  echo "${DEPS_LIST[@]}"
+  exit
+elif [[ -n "$BLOB_SEARCH" ]]; then
+  if [[ "$FIND_WHICH" = "true" ]]; then
+    echo -e "$COLOR_G""Looking for libs that require" "$BLOB_NAME" ..."$COLOR_Y"
+    FIND_REQUIRE
+    echo -e "$COLOR_G""Looking for bins that require" "$BLOB_NAME" ..."$COLOR_Y"
+    FIND_REQ_BINS
+    exit
+  elif [[ "$FIND_MISSING" = "true" ]]; then
+    echo -e "$COLOR_P""Looking for blobs that have unmet dependencies."
+    FIND_MISSING_REQS
+    exit
+  else
+    echo -e "$COLOR_P""These are the search results of matched dependencies."
+    echo "If not found it'll be mentioned."
+    echo
+    FIND_DEPS
+    exit
+  fi
+fi
